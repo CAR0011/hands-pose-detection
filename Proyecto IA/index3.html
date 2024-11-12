@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Pose Detection</title>
+    <!-- Incluye las bibliotecas necesarias -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
+    <style>
+        #video {
+            transform: scaleX(-1); /* Reflejar horizontalmente el video */
+            filter: contrast(1.5); /* Aplicar filtro de contraste */
+        }
+        .drawingPanel {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 1px solid #ccc;
+            overflow: hidden;
+            margin-top: 10px;
+            display: inline-block;
+        }
+        #positionInfo {
+            position: absolute;
+            top: 0;
+            left: 0;
+            margin: 10px;
+            font-size: 14px;
+            color: white;
+        }
+        #predictedLetter {
+            margin-top: 20px;
+            font-size: 20px;
+            color: blue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hand Pose Detection</h1>
+    <video id="video" width="640" height="480" autoplay></video>
+    <div class="drawingPanel" id="realTimePanel"></div>
+    <div class="drawingPanel" id="newDrawingPanel"></div>
+    <button onclick="clearDrawing()">Borrar Dibujo</button>
+    <button onclick="toggleDrawing()">Iniciar/Detener Dibujo</button>
+    <button onclick="captureAndPredict()">Terminar Dibujo</button>
+    <div id="positionInfo"></div>
+    <input type="text" id="predictedLetterText" placeholder="Letra Predicha" readonly />
+
+    <script>
+        let drawingEnabled = false;
+        let prevPalmPosition = null;
+        let currentDrawingPanel = null;
+        const positionHistory = [];
+
+        async function detectHandPose() {
+            const net = await handpose.load();
+
+            const video = document.getElementById('video');
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+
+            const realTimePanel = document.getElementById('realTimePanel');
+            const newDrawingPanel = document.getElementById('newDrawingPanel');
+            const positionInfo = document.getElementById('positionInfo');
+
+            setInterval(async () => {
+                const predictions = await net.estimateHands(video);
+
+                realTimePanel.innerHTML = '';
+
+                if (predictions.length > 0) {
+                    const palmPosition = predictions[0].landmarks[0];
+                    const reflectedPalmPosition = [640 - palmPosition[0], palmPosition[1]];
+
+                    positionInfo.textContent = `Posición de la Palma: X=${reflectedPalmPosition[0]}, Y=${reflectedPalmPosition[1]}`;
+
+                    currentDrawingPanel = drawingEnabled ? newDrawingPanel : null;
+
+                    if (drawingEnabled && currentDrawingPanel) {
+                        if (prevPalmPosition) {
+                            const line = document.createElement('div');
+                            const distance = Math.hypot(prevPalmPosition[0] - reflectedPalmPosition[0], prevPalmPosition[1] - reflectedPalmPosition[1]);
+
+                            line.style.position = 'absolute';
+                            line.style.width = `${distance}px`;
+                            line.style.height = '5px';  // Grosor de la línea más gruesa
+                            line.style.background = 'green';
+                            line.style.left = prevPalmPosition[0] + 'px';
+                            line.style.top = prevPalmPosition[1] + 'px';
+                            line.style.transformOrigin = '0 0';
+                            line.style.transform = `rotate(${Math.atan2(reflectedPalmPosition[1] - prevPalmPosition[1], reflectedPalmPosition[0] - prevPalmPosition[0])}rad)`;
+
+                            currentDrawingPanel.appendChild(line);
+                        }
+
+                        prevPalmPosition = reflectedPalmPosition;
+                        positionHistory.push(reflectedPalmPosition);
+                    }
+                } else {
+                    positionHistory.length = 0;
+                    prevPalmPosition = null;
+                }
+            }, 50); // Ajuste de intervalo para un seguimiento más suave
+        }
+
+        function clearDrawing() {
+            const newDrawingPanel = document.getElementById('newDrawingPanel');
+            newDrawingPanel.innerHTML = '';
+
+            positionHistory.length = 0;
+            prevPalmPosition = null;
+            const positionInfo = document.getElementById('positionInfo');
+            positionInfo.textContent = 'Posición de la Palma: X=, Y=';
+            document.getElementById('predictedLetterText').value = '';
+        }
+
+        function toggleDrawing() {
+            drawingEnabled = !drawingEnabled;
+
+            if (!drawingEnabled) {
+                positionHistory.length = 0;
+                prevPalmPosition = null;
+            }
+        }
+
+        async function captureAndPredict() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const tensor = tf.browser.fromPixels(imageData).toFloat().expandDims();
+
+            // Define y entrena el modelo CNN
+            const model = tf.sequential();
+            model.add(tf.layers.conv2d({
+                inputShape: [480, 640, 3],
+                filters: 32,
+                kernelSize: 3,
+                activation: 'relu'
+            }));
+            model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
+            model.add(tf.layers.flatten());
+            model.add(tf.layers.dense({ units: 128, activation: 'relu' }));
+            model.add(tf.layers.dense({ units: 5, activation: 'softmax' }));
+
+            model.compile({
+                optimizer: 'adam',
+                loss: 'categoricalCrossentropy',
+                metrics: ['accuracy']
+            });
+
+            // Entrenamiento del modelo
+            const xs = tf.randomNormal([100, 480, 640, 3]);
+            const ys = tf.randomUniform([100, 5]);
+            await model.fit(xs, ys, { epochs: 10 });
+
+            // Predicción
+            const prediction = model.predict(tensor);
+            const predictedLetterIndex = tf.argMax(prediction, axis=1).dataSync()[0];
+            const letters = ['A', 'B', 'C', 'D', 'E'];
+            const predictedLetter = letters[predictedLetterIndex];
+
+            // Mostrar la predicción en el cuadro de texto
+            document.getElementById('predictedLetterText').value = predictedLetter;
+        }
+
+        detectHandPose();
+    </script>
+
+</body>
+</html>

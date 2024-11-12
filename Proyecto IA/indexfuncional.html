@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Pose Detection</title>
+    <!-- Incluye las bibliotecas necesarias -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <style>
+        #video {
+            transform: scaleX(-1); /* Reflejar horizontalmente el video */
+        }
+        .drawingPanel {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 1px solid #ccc;
+            overflow: hidden;
+            margin-top: 10px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hand Pose Detection</h1>
+    <video id="video" width="640" height="480" autoplay></video>
+    <div class="drawingPanel" id="realTimePanel"></div>
+    <div class="drawingPanel" id="drawingHistoryPanel"></div>
+
+    <script>
+        // Función para cargar el modelo y realizar la detección de postura de la mano
+        async function detectHandPose() {
+            // Cargar el modelo
+            const net = await handpose.load();
+
+            // Obtener el stream de la cámara
+            const video = document.getElementById('video');
+            const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
+            video.srcObject = stream;
+
+            // Obtener los paneles de dibujo
+            const realTimePanel = document.getElementById('realTimePanel');
+            const drawingHistoryPanel = document.getElementById('drawingHistoryPanel');
+
+            // Inicializar el punto anterior y el historial de posiciones
+            let prevIndexFingerTip = null;
+            const positionHistory = [];
+
+            // Detección de la mano en cada frame
+            setInterval(async () => {
+                const predictions = await net.estimateHands(video);
+
+                // Limpiar el panel de tiempo real
+                realTimePanel.innerHTML = '';
+
+                if (predictions.length > 0) {
+                    const indexFingerTip = predictions[0].landmarks[8]; // Índice 8 representa la punta del dedo índice
+
+                    // Reflejar horizontalmente las coordenadas del punto
+                    const reflectedIndexFingerTip = [640 - indexFingerTip[0], indexFingerTip[1]];
+
+                    // Dibujar el punto de la punta del dedo índice en el panel de tiempo real
+                    const dot = document.createElement('div');
+                    dot.style.width = '10px';
+                    dot.style.height = '10px';
+                    dot.style.background = 'red';
+                    dot.style.borderRadius = '50%';
+                    dot.style.position = 'absolute';
+                    dot.style.left = reflectedIndexFingerTip[0] + 'px';
+                    dot.style.top = reflectedIndexFingerTip[1] + 'px';
+                    realTimePanel.appendChild(dot);
+
+                    // Conectar los puntos con una línea en tiempo real
+                    if (prevIndexFingerTip) {
+                        const line = document.createElement('div');
+                        line.style.position = 'absolute';
+                        line.style.width = '2px';
+                        line.style.height = '2px';
+                        line.style.background = 'red';
+                        line.style.left = prevIndexFingerTip[0] + 'px';
+                        line.style.top = prevIndexFingerTip[1] + 'px';
+                        line.style.transformOrigin = '0 0';
+                        line.style.transform = `rotate(${Math.atan2(reflectedIndexFingerTip[1] - prevIndexFingerTip[1], reflectedIndexFingerTip[0] - prevIndexFingerTip[0])}rad)`;
+                        realTimePanel.appendChild(line);
+                    }
+
+                    prevIndexFingerTip = reflectedIndexFingerTip;
+
+                    // Almacenar la posición actual en el historial
+                    positionHistory.push(reflectedIndexFingerTip);
+                } else {
+                    // Limpiar el historial si no se detecta la mano
+                    if (positionHistory.length > 1) {
+                        // Dibujar el historial en el panel de historial
+                        const path = document.createElement('div');
+                        path.style.position = 'absolute';
+                        path.style.width = '2px';
+                        path.style.height = '2px';
+                        path.style.background = 'blue';
+                        path.style.transformOrigin = '0 0';
+                        path.style.transform = `rotate(${Math.atan2(positionHistory[1][1] - positionHistory[0][1], positionHistory[1][0] - positionHistory[0][0])}rad)`;
+                        path.style.left = positionHistory[0][0] + 'px';
+                        path.style.top = positionHistory[0][1] + 'px';
+                        path.style.boxSizing = 'border-box';
+                        drawingHistoryPanel.appendChild(path);
+
+                        for (let i = 1; i < positionHistory.length; i++) {
+                            const dot = document.createElement('div');
+                            dot.style.width = '2px';
+                            dot.style.height = '2px';
+                            dot.style.background = 'blue';
+                            dot.style.position = 'absolute';
+                            dot.style.left = positionHistory[i][0] + 'px';
+                            dot.style.top = positionHistory[i][1] + 'px';
+                            path.appendChild(dot);
+                        }
+                    }
+
+                    // Limpiar el historial
+                    positionHistory.length = 0;
+                    prevIndexFingerTip = null;
+                }
+            }, 20); // Intervalo reducido a 20ms para una actualización más frecuente y un trazo más suave
+        }
+        // Llamar a la función para cargar el modelo y detectar la postura de la mano
+        detectHandPose();
+    </script>
+</body>
+</html>
+
+
+

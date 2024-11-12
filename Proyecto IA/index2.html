@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detección de Postura de Mano con OCR</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <!-- Incluye las bibliotecas necesarias -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
+    <style>
+        body {
+            background-color: #e8f5e9;
+            color: #343a40;
+            font-family: 'Roboto', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 {
+            margin-bottom: 20px;
+            font-size: 36px;
+            color: #007bff;
+            text-align: center;
+        }
+        .drawingPanel {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #007bff;
+            border-radius: 10px;
+            background-color: #ffffff;
+            overflow: hidden;
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #video {
+            transform: scaleX(-1); /* Reflejar horizontalmente el video */
+            position: relative;
+            border-radius: 10px;
+        }
+        .centerPoint {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #007bff;
+            border-radius: 50%;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .fingerPoint {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: red;
+            border-radius: 50%;
+        }
+        .writingPoint {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: blue;
+            border-radius: 50%;
+        }
+        .ocr-result {
+            margin-top: 20px;
+            padding: 20px;
+            border: 2px solid #007bff;
+            border-radius: 5px;
+            background-color: #e9ecef;
+            font-size: 24px;
+            color: #343a40;
+            text-align: center;
+            width: 80%;
+            max-width: 600px;
+        }
+        .button-group {
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .button-group button {
+            margin: 0 10px;
+            font-size: 18px;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            border: none;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            border: none;
+        }
+        .btn-danger:hover {
+            background-color: #b52a3a;
+        }
+    </style>
+</head>
+<body>
+    <h1>Detección de Postura de Mano con OCR</h1>
+    <div class="drawingPanel">
+        <video id="video" width="640" height="480" autoplay></video>
+        <div class="centerPoint"></div> <!-- Punto central añadido -->
+    </div>
+    <div class="drawingPanel" id="newDrawingPanel">
+        <div id="writingPoint" class="writingPoint"></div> <!-- Punto de escritura añadido -->
+    </div> <!-- Nuevo panel agregado -->
+    <div class="button-group">
+        <button class="btn btn-danger" onclick="clearDrawing()">Borrar Dibujo</button>
+        <button class="btn btn-primary" onclick="recognizeText()">Reconocer Texto</button> <!-- Botón para reconocer texto -->
+    </div>
+    <div id="ocrResult" class="ocr-result"></div> <!-- Área para mostrar el resultado del OCR -->
+
+    <script>
+        let drawingEnabled = false;
+        let prevIndexFingerTip = null;
+        let currentDrawingPanel = null;
+        const positionHistory = [];
+        const smoothingFactor = 0.7; // Factor de suavizado para el seguimiento del punto
+
+        // Función para cargar el modelo y realizar la detección de postura de la mano
+        async function detectHandPose() {
+            // Cargar el modelo
+            const net = await handpose.load();
+
+            // Obtener el stream de la cámara
+            const video = document.getElementById('video');
+            const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
+            video.srcObject = stream;
+
+            // Obtener el panel de dibujo
+            const newDrawingPanel = document.getElementById('newDrawingPanel'); // Nuevo panel
+
+            // Posición inicial para suavizado
+            let smoothedX = 0;
+            let smoothedY = 0;
+
+            // Detección de la mano en cada frame
+            setInterval(async () => {
+                const predictions = await net.estimateHands(video);
+
+                if (predictions.length > 0) {
+                    const indexFingerTip = predictions[0].landmarks[8]; // Índice 8 representa la punta del dedo índice
+
+                    // Reflejar horizontalmente las coordenadas del punto
+                    const reflectedIndexFingerTip = [640 - indexFingerTip[0], indexFingerTip[1]];
+
+                    // Aplicar suavizado a las coordenadas del dedo índice
+                    smoothedX = smoothedX * smoothingFactor + reflectedIndexFingerTip[0] * (1 - smoothingFactor);
+                    smoothedY = smoothedY * smoothingFactor + reflectedIndexFingerTip[1] * (1 - smoothingFactor);
+
+                    // Actualizar la posición del punto de la punta del dedo índice en el video
+                    const writingPoint = document.getElementById('writingPoint');
+                    writingPoint.style.left = smoothedX + 'px';
+                    writingPoint.style.top = smoothedY + 'px';
+
+                    if (drawingEnabled) {
+                        const fingerPoint = document.createElement('div');
+                        fingerPoint.className = 'fingerPoint';
+                        fingerPoint.style.left = smoothedX + 'px';
+                        fingerPoint.style.top = smoothedY + 'px';
+                        newDrawingPanel.appendChild(fingerPoint);
+                    }
+                }
+            }, 100);
+        }
+
+        // Función para borrar el dibujo
+        function clearDrawing() {
+            // Limpiar el panel de dibujo
+            const newDrawingPanel = document.getElementById('newDrawingPanel');
+            newDrawingPanel.innerHTML = '<div id="writingPoint" class="writingPoint"></div>'; // Reagregar el punto de escritura
+        }
+
+        // Función para alternar entre el modo de dibujo y el modo de pausa
+        function toggleDrawing() {
+            drawingEnabled = !drawingEnabled;
+        }
+
+        // Función para generar una predicción y descargarla como imagen
+        function generatePrediction() {
+            // Crear un canvas para dibujar las posiciones almacenadas
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+
+            // Dibujar las líneas continuas a partir del historial de posiciones
+            ctx.beginPath();
+            ctx.strokeStyle = 'green'; // Cambiar el color del trazo a verde
+            ctx.lineWidth = 5; // Ajustar el grosor de la línea
+
+            for (let i = 0; i < positionHistory.length - 1; i++) {
+                const [x1, y1] = positionHistory[i];
+                const [x2, y2] = positionHistory[i + 1];
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+            }
+
+            ctx.stroke();
+            ctx.closePath();
+
+            // Descargar el canvas como una imagen
+            const link = document.createElement('a');
+            link.href = canvas.toDataURL();
+            link.download = 'drawing.png';
+            link.click();
+        }
+
+        // Función para reconocer el texto usando Tesseract OCR
+        async function recognizeText() {
+            // Obtener el panel de dibujo actual
+            const newDrawingPanel = document.getElementById('newDrawingPanel');
+
+            // Crear un canvas temporal para copiar el contenido del panel de dibujo
+            const canvas = document.createElement('canvas');
+            canvas.width = newDrawingPanel.clientWidth;
+            canvas.height = newDrawingPanel.clientHeight;
+            const ctx = canvas.getContext('2d');
+
+                        // Dibujar los elementos del panel de dibujo en el canvas
+                        const elements = newDrawingPanel.children;
+            for (let i = 0; i < elements.length; i++) {
+                const element = elements[i];
+                if (element.className === 'fingerPoint' || element.className === 'writingPoint') {
+                    const rect = element.getBoundingClientRect();
+                    ctx.beginPath();
+                    ctx.fillStyle = element.className === 'fingerPoint' ? 'red' : 'blue';
+                    ctx.arc(rect.left - newDrawingPanel.offsetLeft + rect.width / 2, rect.top - newDrawingPanel.offsetTop + rect.height / 2, rect.width / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.closePath();
+                }
+            }
+
+            // Convertir el contenido del canvas en una imagen codificada en base64
+            const imageData = canvas.toDataURL('image/png');
+
+            // Usar Tesseract.js para realizar el OCR en la imagen
+            const { data: { text } } = await Tesseract.recognize(
+                imageData,
+                'eng', // Idioma: inglés
+                { logger: m => console.log(m) }
+            );
+
+            // Mostrar el texto reconocido en el área de resultados
+            const ocrResult = document.getElementById('ocrResult');
+            ocrResult.textContent = text;
+        }
+
+        // Iniciar la detección de la postura de la mano cuando se carga la página
+        document.addEventListener('DOMContentLoaded', function() {
+            detectHandPose();
+        });
+
+        // Detectar la tecla "Control" para alternar el dibujo
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Control') {
+                toggleDrawing();
+            }
+        });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+</body>
+</html>
+
+
+
+
+
+
+
